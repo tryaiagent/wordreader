@@ -1,0 +1,287 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fnil\fcharset0 .AppleSystemUIFontMonospaced-Regular;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\deftab560
+\pard\pardeftab560\slleading20\partightenfactor0
+
+\f0\fs24 \cf0 <!DOCTYPE html>\
+<html lang="en">\
+<head>\
+<meta charset="UTF-8">\
+<meta name="viewport" content="width=device-width, initial-scale=1.0">\
+<title>Word Reader</title>\
+<style>\
+  body \{ font-family: system-ui, sans-serif; max-width: 960px; margin: 40px auto; padding: 0 16px; color: #222; \}\
+  .layout \{ display: flex; gap: 24px; align-items: flex-start; \}\
+  .main \{ flex: 1; \}\
+  aside \{ width: 260px; border: 1px solid #ddd; border-radius: 8px; padding: 12px 16px; max-height: 80vh; overflow-y: auto; \}\
+  aside h2 \{ font-size: 1.1rem; margin: 0 0 8px; \}\
+  #readList \{ margin: 0; padding-left: 28px; font-size: 1.2rem; line-height: 1.8; \}\
+  #readList li.latest \{ font-weight: bold; color: #0a58ca; \}\
+  h1 \{ font-size: 1.6rem; \}\
+  fieldset \{ border: 1px solid #ccc; border-radius: 8px; margin-bottom: 16px; \}\
+  label \{ display: inline-block; margin: 6px 16px 6px 0; \}\
+  input[type=number] \{ width: 70px; \}\
+  .controls \{ margin-bottom: 10px; \}\
+  .controls button \{ font-size: 1rem; padding: 10px 20px; margin-right: 8px; cursor: pointer; \}\
+  .controls button:disabled \{ cursor: not-allowed; opacity: .5; \}\
+  .muted \{ color: #777; \}\
+  .done \{ margin: 16px 0; padding: 16px; border-radius: 8px; background: #e6f4ea; color: #1e6b34; font-size: 1.4rem; font-weight: bold; text-align: center; \}\
+</style>\
+</head>\
+<body>\
+<h1>Word Reader</h1>\
+<div class="layout">\
+<div class="main">\
+\
+<fieldset>\
+  <legend>Words file</legend>\
+  <input type="file" id="fileInput" accept=".txt,.csv,text/plain">\
+  <div class="muted">Loads words.txt from the site by default. Choose a file to use a different list (one word per line).</div>\
+  <label>Number of words to read <input type="number" id="wordCount" min="1" placeholder="All"></label>\
+  <button id="setCountBtn">Set</button>\
+  <span class="muted" id="countInfo">Reading all words.</span>\
+</fieldset>\
+\
+<fieldset>\
+  <legend>Settings (apply to the next word read)</legend>\
+  <label>Repeat each word <input type="number" id="repeatCount" min="1" value="3"> times</label>\
+  <label>Gap <input type="number" id="gapSeconds" min="0" step="0.5" value="1"> seconds</label>\
+  <label><input type="checkbox" id="autoAdvance"> Auto-advance to next word after gap</label>\
+</fieldset>\
+\
+<div class="controls">\
+  <button id="prevBtn" disabled>&larr; Previous</button>\
+  <button id="replayBtn" disabled>Replay</button>\
+  <button id="nextBtn" disabled>Next &rarr;</button>\
+</div>\
+<div class="controls">\
+  <button id="startBtn" disabled>Start</button>\
+  <button id="pauseBtn" disabled>Pause</button>\
+  <button id="resetBtn" disabled>Reset</button>\
+</div>\
+\
+<div id="doneMsg" class="done" hidden></div>\
+<div id="status" class="muted">Load a file to begin.</div>\
+<div id="voiceInfo" class="muted"></div>\
+</div>\
+\
+<aside>\
+  <h2>Previously read words</h2>\
+  <ol id="readList"></ol>\
+</aside>\
+</div>\
+\
+<script>\
+  const $ = id => document.getElementById(id);\
+  let words = [];\
+  let allWords = [];\
+  let index = -1;\
+  let session = 0; // increments to cancel in-flight reading\
+  let readSet = new Set();\
+  let limit = 0; // 0 means all words\
+  let paused = false;\
+  let interrupted = false; // speech was cut off by Pause and must be repeated\
+  let ukVoice = null;\
+  const synth = window.speechSynthesis || null;\
+\
+  function pickVoice() \{\
+    if (!synth) \{ $('voiceInfo').textContent = 'Speech is not supported in this browser. Open the page in Chrome or Safari.'; return; \}\
+    const gb = synth.getVoices().filter(v => v.lang.replace('_', '-') === 'en-GB');\
+    const score = v => (/premium|enhanced/i.test(v.name) ? 4 : 0)\
+      + (/google uk english/i.test(v.name) ? 3 : 0)\
+      + (/daniel|serena|kate|stephanie|arthur|martha/i.test(v.name) ? 2 : 0)\
+      + (v.localService ? 1 : 0);\
+    ukVoice = gb.sort((a, b) => score(b) - score(a))[0] || null;\
+    $('voiceInfo').textContent = ukVoice ? `Voice: $\{ukVoice.name\}` : 'No UK English voice found; using default en-GB.';\
+  \}\
+  pickVoice();\
+  if (synth) synth.onvoiceschanged = pickVoice;\
+\
+  $('fileInput').addEventListener('change', e => \{\
+    const file = e.target.files[0];\
+    if (!file) return;\
+    const reader = new FileReader();\
+    reader.onload = () => loadWords(String(reader.result));\
+    reader.onerror = () => setStatus('Could not read the file.');\
+    reader.readAsText(file);\
+    e.target.value = ''; // allow re-selecting the same file\
+  \});\
+\
+  function loadWords(text) \{\
+    const seen = new Set();\
+    allWords = text.split(/[\\r\\n,;\\t ]+/)\
+      .map(w => w.replace(/\\d+/g, '').replace(/^[^A-Za-z]+|[^A-Za-z]+$/g, ''))\
+      .filter(w => w && !seen.has(w.toLowerCase()) && seen.add(w.toLowerCase()));\
+    if (!allWords.length) \{ stop(); words = []; index = -1; renderReadList(); setStatus('No words found in file.'); updateButtons(); return; \}\
+    reset();\
+    setStatus(`Loaded $\{allWords.length\} words; $\{total()\} will be read at random. Press Start.`);\
+  \}\
+\
+  function total() \{\
+    return limit > 0 ? Math.min(limit, words.length) : words.length;\
+  \}\
+\
+  $('setCountBtn').addEventListener('click', () => \{\
+    const n = parseInt($('wordCount').value, 10);\
+    limit = n > 0 ? n : 0;\
+    $('countInfo').textContent = limit ? `Set to $\{limit\} words.` : 'Reading all words.';\
+    if (!allWords.length) \{ updateButtons(); return; \}\
+    reset();\
+    $('autoAdvance').checked = true;\
+    goTo(0);\
+  \});\
+\
+  $('resetBtn').addEventListener('click', () => \{\
+    reset();\
+    setStatus(`Reset. $\{total()\} of $\{allWords.length\} words will be read at random. Press Start.`);\
+  \});\
+\
+  $('pauseBtn').addEventListener('click', () => \{\
+    paused = !paused;\
+    if (paused && synth?.speaking) \{ interrupted = true; synth.cancel(); \}\
+    $('pauseBtn').textContent = paused ? 'Resume' : 'Pause';\
+    if (paused) setStatus('Paused. Press Resume to continue.');\
+  \});\
+\
+  function reset() \{\
+    words = [...allWords];\
+    for (let i = words.length - 1; i > 0; i--) \{\
+      const j = Math.floor(Math.random() * (i + 1));\
+      [words[i], words[j]] = [words[j], words[i]];\
+    \}\
+    stop();\
+    index = -1;\
+    readSet = new Set();\
+    renderReadList();\
+    $('doneMsg').hidden = true;\
+    updateButtons();\
+  \}\
+\
+  $('startBtn').addEventListener('click', () => \{\
+    readSet = new Set();\
+    goTo(0);\
+  \});\
+  $('nextBtn').addEventListener('click', () => goTo(index + 1));\
+  $('prevBtn').addEventListener('click', () => goTo(index - 1));\
+  $('replayBtn').addEventListener('click', () => goTo(index));\
+\
+  function goTo(i) \{\
+    if (i < 0 || i >= total()) return;\
+    stop();\
+    index = i;\
+    readSet.add(index);\
+    $('doneMsg').hidden = true;\
+    renderReadList();\
+    updateButtons();\
+    readCurrent();\
+  \}\
+\
+  // Shows every word read so far, except the one currently being read (unless the session is complete).\
+  function renderReadList(showAll = false) \{\
+    const list = $('readList');\
+    list.innerHTML = '';\
+    [...readSet].filter(i => showAll || i !== index).sort((a, b) => a - b).forEach(i => \{\
+      const li = document.createElement('li');\
+      li.value = i + 1;\
+      li.textContent = words[i];\
+      if (i === index - 1) li.className = 'latest';\
+      list.appendChild(li);\
+    \});\
+    list.lastElementChild?.scrollIntoView(\{ block: 'nearest' \});\
+  \}\
+\
+  function getSettings() \{\
+    const repeat = Math.max(1, parseInt($('repeatCount').value, 10) || 1);\
+    const gap = Math.max(0, parseFloat($('gapSeconds').value) || 0);\
+    return \{ repeat, gapMs: gap * 1000 \};\
+  \}\
+\
+  async function readCurrent() \{\
+    const my = ++session;\
+    synth?.cancel();\
+    const word = words[index];\
+    const \{ repeat, gapMs \} = getSettings(); // read fresh for each word\
+    for (let r = 1; r <= repeat; r++) \{\
+      await waitWhilePaused(my);\
+      if (my !== session) return;\
+      setStatus(`Word $\{index + 1\} of $\{total()\} \'97 reading $\{r\}/$\{repeat\}`);\
+      await speak(word);\
+      if (my !== session) return;\
+      if (interrupted) \{ interrupted = false; r--; continue; \}\
+      if (r < repeat) await pausableSleep(gapMs, my);\
+    \}\
+    if (my !== session) return;\
+    if (index >= total() - 1) \{\
+      stop();\
+      renderReadList(true);\
+      $('doneMsg').textContent = `$\{total()\} words have completed.`;\
+      $('doneMsg').hidden = false;\
+      setStatus('Finished. Press Reset to start again.');\
+      $('nextBtn').disabled = true;\
+      $('pauseBtn').disabled = true;\
+    \} else if ($('autoAdvance').checked) \{\
+      setStatus(`Word $\{index + 1\} of $\{total()\} \'97 next word in $\{gapMs / 1000\}s`);\
+      await pausableSleep(gapMs, my);\
+      await waitWhilePaused(my);\
+      if (my === session) goTo(index + 1);\
+    \} else \{\
+      setStatus(`Word $\{index + 1\} of $\{total()\} \'97 done. Press Next.`);\
+    \}\
+  \}\
+\
+  function speak(text) \{\
+    return new Promise(resolve => \{\
+      if (!synth) return resolve();\
+      const u = new SpeechSynthesisUtterance(text);\
+      u.lang = 'en-GB';\
+      if (ukVoice) u.voice = ukVoice;\
+      u.rate = 0.85;\
+      u.onend = u.onerror = resolve;\
+      synth.speak(u);\
+    \});\
+  \}\
+\
+  const sleep = ms => new Promise(r => setTimeout(r, ms));\
+\
+  async function waitWhilePaused(my) \{\
+    while (paused && my === session) await sleep(100);\
+  \}\
+\
+  async function pausableSleep(ms, my) \{\
+    while (ms > 0 && my === session) \{\
+      await sleep(100);\
+      if (!paused) ms -= 100;\
+    \}\
+  \}\
+\
+  function stop() \{\
+    session++;\
+    synth?.cancel();\
+    paused = false;\
+    interrupted = false;\
+    $('pauseBtn').textContent = 'Pause';\
+  \}\
+\
+  function updateButtons() \{\
+    $('prevBtn').disabled = index <= 0;\
+    $('nextBtn').disabled = !words.length || index >= total() - 1;\
+    $('replayBtn').disabled = index < 0;\
+    $('pauseBtn').disabled = index < 0;\
+    $('resetBtn').disabled = !allWords.length;\
+    $('startBtn').disabled = !words.length;\
+  \}\
+\
+  function setStatus(msg) \{ $('status').textContent = msg; \}\
+\
+  fetch('words.txt', \{ cache: 'no-store' \})\
+    .then(r => r.ok ? r.text() : Promise.reject(r.status))\
+    .then(loadWords)\
+    .catch(() => setStatus('Could not load words.txt. Choose a file instead.'));\
+</script>\
+</body>\
+</html>\
+\
+}
