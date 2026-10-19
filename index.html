@@ -20,6 +20,9 @@
   .controls button { font-size: 1rem; padding: 10px 20px; margin-right: 8px; cursor: pointer; }
   .controls button:disabled { cursor: not-allowed; opacity: .5; }
   .muted { color: #777; }
+  .list-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+  .list-buttons button { padding: 8px 14px; font-size: 1rem; cursor: pointer; }
+  .list-buttons button.active { background: #0a58ca; color: #fff; border-color: #0a58ca; }
   .done { margin: 16px 0; padding: 16px; border-radius: 8px; background: #e6f4ea; color: #1e6b34; font-size: 1.4rem; font-weight: bold; text-align: center; }
 </style>
 </head>
@@ -35,6 +38,12 @@
   <label>Number of words to read <input type="number" id="wordCount" min="1" placeholder="All"></label>
   <button id="setCountBtn">Set</button>
   <span class="muted" id="countInfo">Reading all words.</span>
+</fieldset>
+
+<fieldset>
+  <legend>Word lists</legend>
+  <div id="listButtons" class="list-buttons"></div>
+  <div class="muted">Loads words-1.txt … words-10.txt from the words-files folder.</div>
 </fieldset>
 
 <fieldset>
@@ -290,10 +299,25 @@
 
   function setStatus(msg) { $('status').textContent = msg; }
 
-  fetch('words.txt', { cache: 'no-store' })
-    .then(r => r.ok ? r.text() : Promise.reject(r.status))
-    .then(loadWords)
-    .catch(() => setStatus('Could not load words.txt. Choose a file instead.'));
+  function loadFromUrl(name) {
+    setStatus(`Loading ${name}…`);
+    return fetch(name, { cache: 'no-store' })
+      .then(r => r.ok ? r.text() : Promise.reject(r.status))
+      .then(text => { loadWords(text); return true; })
+      .catch(() => { setStatus(`Could not load ${name}. Choose a file instead.`); return false; });
+  }
+
+  for (let n = 1; n <= 10; n++) {
+    const btn = document.createElement('button');
+    btn.textContent = `words-${n}`;
+    btn.addEventListener('click', async () => {
+      document.querySelectorAll('#listButtons button').forEach(b => b.classList.remove('active'));
+      if (await loadFromUrl(`words-files/words-${n}.txt`)) btn.classList.add('active');
+    });
+    $('listButtons').appendChild(btn);
+  }
+
+  loadFromUrl('words.txt');
 </script>
 </body>
 </html>
