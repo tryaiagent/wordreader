@@ -42,6 +42,7 @@
   <label>Repeat each word <input type="number" id="repeatCount" min="1" value="3"> times</label>
   <label>Gap <input type="number" id="gapSeconds" min="0" step="0.5" value="1"> seconds</label>
   <label><input type="checkbox" id="autoAdvance"> Auto-advance to next word after gap</label>
+  <label>Voice <select id="voiceSelect"></select></label>
 </fieldset>
 
 <div class="controls">
@@ -79,16 +80,37 @@
   let ukVoice = null;
   const synth = window.speechSynthesis || null;
 
+  // Speech API doesn't expose gender, so label known voice names.
+  const MALE = /daniel|arthur|oliver|malcolm|george|ryan|thomas|uk english male/i;
+  const FEMALE = /serena|kate|stephanie|martha|fiona|libby|sonia|hazel|susan|uk english female/i;
+  let gbVoices = [];
+
   function pickVoice() {
     if (!synth) { $('voiceInfo').textContent = 'Speech is not supported in this browser. Open the page in Chrome or Safari.'; return; }
-    const gb = synth.getVoices().filter(v => v.lang.replace('_', '-') === 'en-GB');
     const score = v => (/premium|enhanced/i.test(v.name) ? 4 : 0)
       + (/google uk english/i.test(v.name) ? 3 : 0)
       + (/daniel|serena|kate|stephanie|arthur|martha/i.test(v.name) ? 2 : 0)
       + (v.localService ? 1 : 0);
-    ukVoice = gb.sort((a, b) => score(b) - score(a))[0] || null;
-    $('voiceInfo').textContent = ukVoice ? `Voice: ${ukVoice.name}` : 'No UK English voice found; using default en-GB.';
+    gbVoices = synth.getVoices()
+      .filter(v => v.lang.replace('_', '-') === 'en-GB')
+      .sort((a, b) => score(b) - score(a));
+    const sel = $('voiceSelect');
+    const previous = sel.value;
+    sel.innerHTML = '';
+    gbVoices.forEach((v, i) => {
+      const gender = MALE.test(v.name) ? ' (Male)' : FEMALE.test(v.name) ? ' (Female)' : '';
+      sel.add(new Option(v.name + gender + (i === 0 ? ' — default' : ''), v.name));
+    });
+    if (gbVoices.some(v => v.name === previous)) sel.value = previous;
+    applyVoice();
   }
+
+  function applyVoice() {
+    ukVoice = gbVoices.find(v => v.name === $('voiceSelect').value) || gbVoices[0] || null;
+    $('voiceInfo').textContent = ukVoice ? '' : 'No UK English voice found; using default en-GB.';
+  }
+
+  $('voiceSelect').addEventListener('change', applyVoice);
   pickVoice();
   if (synth) synth.onvoiceschanged = pickVoice;
 
@@ -250,7 +272,6 @@
   }
 
   function stop() {
-    
     session++;
     synth?.cancel();
     paused = false;
