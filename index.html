@@ -114,17 +114,17 @@
 <fieldset>
   <legend>GitHub publishing configuration</legend>
   <label for="githubRepo">Repository (owner/name)</label>
-  <input type="text" id="githubRepo" placeholder="your-name/EnglishSPAG" autocomplete="off" autocapitalize="none" spellcheck="false">
+  <input type="text" id="githubRepo" value="tryaiagent/wordreader" autocomplete="off" autocapitalize="none" spellcheck="false">
   <br>
   <label for="githubToken">GitHub fine-grained token</label>
   <input type="password" id="githubToken" placeholder="Repository Contents: Read and write" autocomplete="off" autocapitalize="none" spellcheck="false">
   <br>
   <label for="pagesUrl">Actual GitHub Pages URL</label>
-  <input type="url" id="pagesUrl" placeholder="https://your-name.github.io/EnglishSPAG/" autocomplete="off" autocapitalize="none" spellcheck="false">
+  <input type="url" id="pagesUrl" value="https://tryaiagent.github.io/wordreader/" autocomplete="off" autocapitalize="none" spellcheck="false">
   <p class="muted">Set GitHub Pages to deploy from main / (root). Files are added under generated/ in a single commit.
     The repository must already have a main branch and permit direct pushes.
     Use a fine-grained token restricted to this repository with Contents: Read and write permission.
-    Both tokens stay in this tab only and are never committed. Repository and URL must be entered again after reload.
+    Both tokens stay in this tab only and are never committed. Repository and URL are preconfigured.
     Published questions and answers will be accessible to anyone who can access your Pages site.</p>
 </fieldset>
 
