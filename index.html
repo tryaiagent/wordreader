@@ -10,6 +10,7 @@
   .main { flex: 1; min-width: 0; }
   input[type=password], input[type=text], input[type=url] { box-sizing: border-box; max-width: 100%; width: 320px; padding: 8px; }
   #publishedLinks a { display: inline-block; margin: 8px 16px 8px 0; overflow-wrap: anywhere; }
+  #publishedLinks a[aria-disabled=true] { color: #777; cursor: not-allowed; text-decoration: none; }
   button, select, input { font: inherit; }
   #generationStatus { margin-top: 10px; overflow-wrap: anywhere; }
   @media (max-width: 700px) {
@@ -74,9 +75,10 @@
   <p class="muted">Generate creates and publishes both HTML pages to main. Answers are bold and underlined.
     Both filenames use SPAG_DDMMYYYY_HHMMSS in your device's local time.</p>
   <div id="publishedLinks" hidden>
-    <a id="questionsPageLink" target="_blank" rel="noopener noreferrer">Open questions on GitHub Pages</a>
-    <a id="answersPageLink" target="_blank" rel="noopener noreferrer">Open answers on GitHub Pages</a>
-    <p class="muted">Committed to main. GitHub Pages deployment may take a few minutes; links may return 404 until deployment completes.</p>
+    <a id="questionsPageLink" role="link" aria-disabled="true" tabindex="-1" target="_blank" rel="noopener noreferrer">Open questions on GitHub Pages</a>
+    <a id="answersPageLink" role="link" aria-disabled="true" tabindex="-1" target="_blank" rel="noopener noreferrer">Open answers on GitHub Pages</a>
+    <p id="deploymentStatus" class="muted" role="status" aria-live="polite">Links remain disabled until both pages are available.</p>
+    <button id="retryDeploymentBtn" hidden>Retry availability check</button>
   </div>
   <div id="generationStatus" role="status" aria-live="polite">Load words to generate a worksheet.</div>
 </fieldset>
@@ -146,6 +148,8 @@
   let wordLoadSession = 0;
   let loadingWords = false;
   let publishing = false;
+  let deploymentController = null;
+  let deployedFiles = null;
   const synth = window.speechSynthesis || null;
 
   // Speech API doesn't expose gender, so label known voice names.
@@ -376,6 +380,9 @@
   }
 
   function invalidateWorksheet() {
+    cancelDeploymentCheck();
+    deployedFiles = null;
+    $('publishedLinks').hidden = true;
     generationController?.abort();
     generationController = null;
     worksheetReady = false;
@@ -391,6 +398,119 @@
       ? 'Press Generate to prepare the worksheet for the current selection.'
       : 'Load words to generate a worksheet.';
   }
+
+  function disablePublishedLinks() {
+    for (const id of ['questionsPageLink', 'answersPageLink']) {
+      $(id).removeAttribute('href');
+      $(id).setAttribute('aria-disabled', 'true');
+      $(id).setAttribute('tabindex', '-1');
+    }
+  }
+
+  function cancelDeploymentCheck() {
+    deploymentController?.abort();
+    deploymentController = null;
+    worksheetReady = false;
+    disablePublishedLinks();
+    $('retryDeploymentBtn').hidden = true;
+  }
+
+  function waitForDeploymentRetry(signal, ms) {
+    return new Promise(resolve => {
+      const finish = () => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, ms);
+      signal.addEventListener('abort', finish, { once: true });
+      if (signal.aborted) finish();
+    });
+  }
+
+  async function probeDeployedFile(file, signal, timeoutMs) {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal.addEventListener('abort', abort, { once: true });
+    const timer = setTimeout(abort, timeoutMs);
+    try {
+      if (signal.aborted) return { ready: false, detail: 'Availability check cancelled.' };
+      const url = new URL(file.url);
+      url.searchParams.set('_spag_check', String(Date.now()));
+      const response = await fetch(url.href, {
+        signal: controller.signal, cache: 'no-store', credentials: 'omit'
+      });
+      if (!response.ok) return { ready: false, detail: `Pages returned HTTP ${response.status}; deployment may still be pending.` };
+      const text = await response.text();
+      const normalize = value => value.replace(/\r\n/g, '\n').trim();
+      return normalize(text) === normalize(file.content)
+        ? { ready: true }
+        : { ready: false, detail: 'The URL is not serving the expected worksheet HTML yet.' };
+    } catch (error) {
+      if (controller.signal.aborted) return { ready: false, detail: 'A Pages availability request timed out or was cancelled.' };
+      if (error instanceof TypeError) {
+        return { ready: false, detail: 'Cannot verify Pages access. Check your connection and Pages URL; a different origin must allow CORS. Try running the app on the same Pages site.' };
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', abort);
+    }
+  }
+
+  async function checkDeployment() {
+    if (!deployedFiles || deploymentController) return;
+    const files = deployedFiles;
+    cancelDeploymentCheck();
+    const controller = new AbortController();
+    deploymentController = controller;
+    $('publishedLinks').hidden = false;
+    $('deploymentStatus').textContent = 'Committed to main. Waiting for both GitHub Pages URLs to serve the generated pages...';
+    setStatus('Waiting for GitHub Pages deployment. Reading remains locked.');
+    updateButtons();
+    const deadline = Date.now() + 300000;
+    let detail = 'Pages deployment is not confirmed yet.';
+    try {
+      while (!controller.signal.aborted && Date.now() < deadline) {
+        const results = await Promise.all(files.map(file =>
+          probeDeployedFile(file, controller.signal, Math.min(10000, Math.max(1, deadline - Date.now())))));
+        if (deploymentController !== controller || controller.signal.aborted) return;
+        if (Date.now() < deadline && results.every(result => result.ready)) {
+          for (const [i, id] of ['questionsPageLink', 'answersPageLink'].entries()) {
+            $(id).href = files[i].url;
+            $(id).removeAttribute('aria-disabled');
+            $(id).removeAttribute('tabindex');
+          }
+          worksheetReady = true;
+          $('deploymentStatus').textContent = 'Both GitHub Pages worksheets are available. Links are now enabled.';
+          $('generationStatus').textContent = 'Generation, publishing and deployment checks complete. HTML downloads are also available.';
+          setStatus('Worksheet ready. Press Start to read the words in worksheet order.');
+          return;
+        }
+        detail = results.find(result => !result.ready)?.detail || 'Deployment check deadline reached.';
+        $('deploymentStatus').textContent = `Waiting for GitHub Pages. ${detail} Checking again in 5 seconds...`;
+        const remaining = deadline - Date.now();
+        if (remaining > 0) await waitForDeploymentRetry(controller.signal, Math.min(5000, remaining));
+      }
+      if (deploymentController !== controller || controller.signal.aborted) return;
+      $('deploymentStatus').textContent = `Could not confirm both pages within 5 minutes. ${detail} Links and Start remain disabled. Retry the availability check without generating or pushing again.`;
+      $('retryDeploymentBtn').hidden = false;
+      setStatus('Pages availability not confirmed. Local downloads are available; use Retry availability check.');
+    } catch (error) {
+      if (deploymentController !== controller || controller.signal.aborted) return;
+      $('deploymentStatus').textContent = `Availability check failed: ${error.message}. Links and Start remain disabled. Retry without generating or pushing again.`;
+      $('retryDeploymentBtn').hidden = false;
+      setStatus('Pages availability check failed. Local downloads remain available.');
+    } finally {
+      if (deploymentController === controller) {
+        controller.abort();
+        deploymentController = null;
+        updateButtons();
+      }
+    }
+  }
+
+  $('retryDeploymentBtn').addEventListener('click', checkDeployment);
 
   function beginWordLoad() {
     const loadId = ++wordLoadSession;
@@ -585,6 +705,10 @@ ${items}
 
   $('generateBtn').addEventListener('click', async () => {
     if (!words.length || loadingWords || generationController) return;
+    invalidateWorksheet();
+    stop();
+    updateButtons();
+    setStatus('Reading locked. Generate and verify the current worksheets before starting.');
     const key = $('apiKey').value.trim();
     if (!key) {
       $('generationStatus').textContent = 'Enter your Groq API key first.';
@@ -598,7 +722,6 @@ ${items}
       $('generationStatus').textContent = error.message;
       return;
     }
-    invalidateWorksheet();
     stop();
     index = -1;
     readSet = new Set();
@@ -639,14 +762,17 @@ ${items}
         { name: answersLink.download, content: answersText }
       ], controller.signal);
       if (generationController !== controller) return;
-      $('questionsPageLink').href = new URL(`generated/${link.download}`, config.pagesUrl).href;
-      $('answersPageLink').href = new URL(`generated/${answersLink.download}`, config.pagesUrl).href;
-      $('publishedLinks').hidden = false;
-      worksheetReady = true;
-      $('generationStatus').textContent = `Generated ${sentences.length} sentences and published both HTML pages to main. Open the links above after GitHub Pages finishes deploying. Downloads are also available.`;
-      setStatus('Worksheet ready. Press Start to read the words in worksheet order.');
+      deployedFiles = [
+        { url: new URL(`generated/${link.download}`, config.pagesUrl).href, content: text },
+        { url: new URL(`generated/${answersLink.download}`, config.pagesUrl).href, content: answersText }
+      ];
+      clearTimeout(timeout);
+      publishing = false;
+      generationController = null;
+      $('generationStatus').textContent = `Generated ${sentences.length} sentences and committed both HTML pages to main. Checking GitHub Pages availability...`;
       link.click();
       answersLink.click();
+      await checkDeployment();
     } catch (error) {
       if (generationController !== controller) return;
       $('generationStatus').textContent = controller.signal.aborted
