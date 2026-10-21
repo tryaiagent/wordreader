@@ -31,13 +31,23 @@ backend is required.
 8. Generate commits both pages together under `generated/` on `main` using the
    GitHub Git Data API. It preserves the existing tree and uses a non-forced branch
    update to avoid overwriting concurrent commits. Selection and publishing inputs
-   are disabled while publishing. The app then displays two GitHub Pages links.
-   Deployment can take several minutes; a successful commit does not mean Pages
-   deployment has finished. Refresh a link later if it returns 404.
+   are disabled while publishing. After the push, the app displays two disabled
+   GitHub Pages link labels and checks the actual public URLs. A successful commit
+   does not mean Pages deployment has finished.
+   The app checks both URLs every 5 seconds for up to 5 minutes, using
+   cache-bypassing, credential-free requests with a 10-second request timeout.
+   Both responses must succeed and contain the expected generated HTML, not a
+   fallback page. Only then do both links and **Start** become enabled.
+   Clicking **Generate** immediately disables any previous publication links.
+   Reset or changing the selected words cancels outstanding deployment checks
+   so old responses cannot reactivate links.
+   If verification times out or fails, both links and Start remain disabled.
+   Use **Retry availability check** to check the same committed pages again,
+   without another Groq request, filename change or GitHub push.
 9. Optional local copies are available via **Download questions (.html)** and
    **Download answers (.html)**. On
    iOS/iPadOS, use the browser's Share / Save to Files option if necessary.
-10. Press **Start** after generation and publishing succeed. Words are spoken in worksheet order; repeat, gap, voice,
+10. Press **Start** after generation, publishing and both Pages availability checks succeed. Words are spoken in worksheet order; repeat, gap, voice,
    pause, replay, previous and next controls remain available.
 
 Changing the list, applying a word count or pressing Reset reshuffles the words
@@ -46,9 +56,10 @@ or timed-out generation never enables reading or exports a partial worksheet.
 If publishing fails, reading remains locked, but the completed HTML downloads
 remain available. Check the repository before retrying after a network error or
 timeout during publishing: the commit may have succeeded despite a lost response.
-Generate runs generation again on retry. Published files are not removed by Reset.
-The displayed publication links last for this tab session; committed pages remain
-available at their URLs after reload.
+**Generate** runs generation again; **Retry availability check** only checks Pages.
+Published files are not removed by Reset. Reset, a new selection or Generate clears
+the current publication links and retry state. Links last for this tab session;
+committed pages remain available at their URLs after reload.
 Large selections may hit Groq's account-specific rate limits; select fewer words
 or wait before retrying. There are no automatic paid retries.
 
@@ -71,6 +82,13 @@ To publish with GitHub Pages, upload [index.html](./index.html) to a repository
 and enable **Settings > Pages > Deploy from a branch**, choosing **main** and
 **/ (root)**. This is necessary to publish the generated folder alongside the app.
 Optional custom Actions deployments must also include `generated/`.
+For availability verification, open the app on the same Pages site as the configured
+base URL when possible. A different origin must allow cross-origin requests (CORS).
+If CORS or network restrictions prevent reading the Pages responses, the app
+explicitly reports that verification could not be completed and leaves links and
+Start disabled, even if the pages can be opened manually. It does not treat opaque
+`no-cors` responses as proof of deployment. Correct the URL/hosting or connection
+and use **Retry availability check**.
 Optionally add `words.txt` at the root and
 `words-files/words-1.txt` through `words-files/words-10.txt`. These word files are
 optional except for the included `words-files/words-1.txt` test list; without a
